@@ -84,7 +84,8 @@ function toEpochMs(value) {
  */
 export function jobLocation(row) {
   const locs = Array.isArray(row?.jobLocations) ? row.jobLocations : [];
-  const parts = [];
+  /** @type {string[]} */
+const parts = [];
   for (const loc of locs) {
     if (!loc || typeof loc !== 'object') continue;
     const place = [loc.city, loc.countryName]
@@ -172,15 +173,34 @@ export default {
     // 'manual' only to read the 302 an unknown tenant answers with; it is
     // never followed. Any other failure propagates unwrapped, so a dead
     // tenant reads as broken and ProbePageBudgetReached keeps its identity.
+
     let shell;
     try {
-      shell = await fetchTextWithRetry(ctx, `${origin}/careers`, { redirect: 'manual' });
+      shell = await fetchTextWithRetry(
+        ctx,
+        `${origin}/careers`,
+        { redirect: 'manual' }
+      );
     } catch (err) {
-      if (err?.status >= 300 && err?.status < 400) {
-        const e = new Error(`keka: ${entry.name} careers page redirected (${err.status} -> ${err.location}) — no such tenant`);
-        /** @type {any} */ (e).status = 404;
+      const httpError = /** @type {{ status?: number, location?: string }} */ (
+        err && typeof err === 'object' ? err : {}
+      );
+
+      if (
+        typeof httpError.status === 'number' &&
+        httpError.status >= 300 &&
+        httpError.status < 400
+      ) {
+        const e = new Error(
+          `keka: ${entry.name} careers page redirected (${httpError.status} -> ${httpError.location ?? 'unknown'}) — no such tenant`
+        );
+
+        /** @type {any} */
+        (e).status = 404;
+
         throw e;
       }
+
       throw err;
     }
 

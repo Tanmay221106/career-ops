@@ -33,12 +33,40 @@ function assertLandingUrl(url) {
 }
 
 // NaN-safe Date.parse.
+/** @param {unknown} value */
 function toEpochMs(value) {
   if (typeof value !== 'string' || !value) return undefined;
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? undefined : parsed;
 }
+/**
+ * @param {any} j - one posting from the v1 jobs list
+ * @returns {{min: number, max: number, currency: string} | undefined}
+ */
+export function landingSalary(j) {
+  if (!j || typeof j !== 'object') return undefined;
 
+const num = (/** @type {unknown} */ v) =>
+    (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined);
+  const lowValue = num(j.gross_salary_low);
+  const highValue = num(j.gross_salary_high);
+
+  if (lowValue === undefined && highValue === undefined) return undefined;
+
+  const resolvedMin = /** @type {number} */ (lowValue ?? highValue);
+  const resolvedMax = /** @type {number} */ (highValue ?? lowValue);
+
+  const currency =
+    typeof j.currency_code === 'string'
+      ? j.currency_code.trim().toUpperCase()
+      : '';
+
+  return {
+    min: Math.min(resolvedMin, resolvedMax),
+    max: Math.max(resolvedMin, resolvedMax),
+    currency,
+  };
+}
 /**
  * Derive a best-effort company name from a Landing.jobs posting URL.
  * Posting URLs are `https://landing.jobs/at/<slug>/<job>`; the `<slug>` is
@@ -58,7 +86,7 @@ export function companyFromUrl(url) {
   return segs[1]
     .replace(/[-_]+/g, ' ')
     .trim()
-    .replace(/\b\w/g, c => c.toUpperCase());
+    .replace(/\b\w/g, (/** @type {string} */ c) => c.toUpperCase());
 }
 
 /**
@@ -76,7 +104,7 @@ export function companyFromUrl(url) {
  *
  * @param {any} j
  * @param {string} [fallbackCompany]
- * @returns {{ title: string, url: string, company: string, location: string, postedAt?: number } | null}
+ * Job
  */
 export function normalizeLandingJob(j, fallbackCompany) {
   if (!j || typeof j !== 'object') return null;
@@ -106,17 +134,37 @@ export function normalizeLandingJob(j, fallbackCompany) {
   const base = [city, country].filter(Boolean).join(', ');
   const location = [base, j.remote === true ? 'Remote' : ''].filter(Boolean).join(', ');
 
-  /** @type {{ title: string, url: string, company: string, location: string, postedAt?: number }} */
-  const job = { title, url, company, location };
-  const postedAt = toEpochMs(j.published_at) ?? toEpochMs(j.created_at);
-  if (postedAt !== undefined) job.postedAt = postedAt;
-  return job;
+ /** @type {{
+ * title: string,
+ * url: string,
+ * company: string,
+ * location: string,
+ * salary?: { min: number, max: number, currency: string },
+ * postedAt?: number
+ * }}
+ */
+const job = { title, url, company, location };
+
+// Extract salary
+const salary = landingSalary(j);
+
+if (salary !== undefined) {
+  job.salary = salary;
 }
 
+// Extract posting date
+const postedAt = toEpochMs(j.published_at) ?? toEpochMs(j.created_at);
+
+if (postedAt !== undefined) {
+  job.postedAt = postedAt;
+}
+
+return job;
+}
 /** @type {Provider} */
 export default {
   id: 'landingjobs',
-
+  
   async fetch(entry, ctx) {
     assertLandingUrl(FEED_URL);
     // redirect:'error' prevents SSRF via server-side redirects
@@ -126,7 +174,19 @@ export default {
         `landingjobs: unexpected API response — expected a JSON array, got ${json === null ? 'null' : typeof json}`,
       );
     }
-    const fallbackCompany = entry?.name;
-    return json.map(j => normalizeLandingJob(j, fallbackCompany)).filter(Boolean);
+      const fallbackCompany = entry?.name;
+
+    /** @type {import('./_types.js').Job[]} */
+    const jobs = [];
+
+    for (const j of json) {
+      const job = normalizeLandingJob(j, fallbackCompany);
+
+      if (job !== null) {
+        jobs.push(job);
+      }
+    }
+
+    return jobs;
   },
 };
